@@ -143,20 +143,9 @@ library ieee;
 entity reg_bank is
         port(  
             ck, rst, ce        : in std_logic       --ce é o WReg
-            --AdRP1, AdRP2, AdWP : in std_logic_vector( 4 downto 0);
-            --AdRP1-> IR(20:16) ou IR(25:21) ; aDRP2-> IR(20:16) ; AdWP-> qual registrador vai ser escrito
-            --===========================================-
-            --DataWP             : in std_logic_vector(31 downto 0); -- Qual dado vai ser escrito
-            --DataRP1, DataRP2   : out std_logic_vector(31 downto 0) Saída do banco de registradores
-            --==========++++=aAAAAAAAAAAAAAAAA+++++--=-=-=-==
---  No nosso caso os sinais serão:  
---  AdRP1   -> rt_address
---  AdRP2   -> rs_address
---  AdWP    -> Signal ?
---  DataWP  -> WData
---  DataRP1 -> rt_data
---  DataRP2 -> rs_data
-
+            rs_address, rt_address, Reg_W : in std_logic_vector(4 downto 0);
+            Reg_Data : in std_logic_vector(31 downto 0)
+            DataRP1, DataRP2   : out std_logic_vector(31 downto 0) 
         );
 end reg_bank;
 
@@ -168,26 +157,24 @@ begin
     g1: for i in 0 to 31 generate        
         -- Remember register $0 is the constant 0, not a register.
         -- This is implemented by never enabling writes to register $0
-        wen(i) <= '1' when i/=0 and AdWP=i and ce='1' else '0';
+        wen(i) <= '1' when i/=0 and Reg_W=i and ce='1' else '0';
          
         -- Remember register $29, the stack pointer, points to some place
         -- near the bottom of the data memory, not the usual place 
 		-- assigned by the MIPS simulator!!
         g2: if i=29 generate -- SP ---  x10010000 + x800 -- top of stack
             r29: entity work.regnbits generic map(INIT_VALUE=>x"10010800")    
-                 port map(ck=>ck, rst=>rst, ce=>wen(i), D=>WData, Q=>reg(i));
+                 port map(ck=>ck, rst=>rst, ce=>wen(i), D=>Reg_Data, Q=>reg(i));
         end generate;  
                 
         g3: if i/=29 generate 
             rx: entity work.regnbits 
-				port map(ck=>ck, rst=>rst, ce=>wen(i), D=>WData, Q=>reg(i));                    
+				port map(ck=>ck, rst=>rst, ce=>wen(i), D=>Reg_Data, Q=>reg(i));                    
         end generate;
     end generate g1;   
 
-    --DataRP1 <= reg(CONV_INTEGER(AdRP1));    -- source1 selection 
-    --DataRP2 <= reg(CONV_INTEGER(AdRP2));    -- source2 selection 
-    rt_data <= reg(CONV_INTEGER(rt_address)); 
-    rs_data <= reg(CONV_INTEGER(rs_address)); 
+    DataRP1 <= reg(CONV_INTEGER(rt_address)); 
+    DataRP2 <= reg(CONV_INTEGER(rs_address)); 
 end reg_bank; 
 
 --++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -206,7 +193,7 @@ entity alu is
     port( 
         op1, op2 : in std_logic_vector(31 downto 0);
         outalu :   out std_logic_vector(31 downto 0);   
-        op_alu : in inst_type ;  
+        op_alu :    in inst_type ;  
         zero_flag : out std_logic
     );
 end alu;
@@ -288,8 +275,8 @@ architecture datapath of  datapath is
     signal      Reg_Dest, Reg_Dest_4, Reg_Dest_5 : std_logic_vector(4 donwto 0);
     signal      rs_address, rt_address, rd_address : std_logic_vector(4 downto 0);
     signal      EscReg : std_logic :='0';                              --Sinal que controla escrita no Banco de R               
-    signal      Reg_D  : std_logic_vector(31 downto 0);              --dado que sera escrito no Banco de R
-    signal      i_S_IN, i_S_OUT : inst_type;
+    signal      Reg_Data  : std_logic_vector(31 downto 0);              --dado que sera escrito no Banco de R
+    signal      i_S_IN, i_S_OUT, I_T_IN : inst_type;
     signal      rt_data_S, rs_data_S, rt_data_T, rt_data_4, sign_extend_T : std_logic_vector(31 downto 0);
     signal      zero_flag, Fonte_PC   : std_logic;
 begin
@@ -299,7 +286,7 @@ begin
         ck=>ck, rst=>rst,
         --====OUT B1
         IR=>B1.ir,
-        npc_S_IN=>B1.npc, i_S_IN=>B1.i,
+        npc_S_IN=>B1.npc,                       -- i_S_IN=>B1.i,
         rs_address=>B1.ir(25 downto 21),
         rt_address=>B1.ir(20 downto 16), sign_extend=> B1.ir(15 downto 0), 
         rd_address=>B1.ir(15 downto 11),
@@ -308,11 +295,11 @@ begin
         rs_data=>rs_data, rt_data=>rt_data,
         signal_extend=>sign_extend, rt_address=>rt_address , rd_address=>rd_address,
         --== OUT B2
-        npc_S_IN=>B2.npc, op1=> B2.rs_data, rt_data_T=>B2.rt_data,
+        i_T_IN=>B2.i, npc_S_IN=>B2.npc, op1=> B2.rs_data, rt_data_T=>B2.rt_data,
         sign_extend_T=>B2.ext_data, 
         --== IN B3
-        branch=>PC_Branch, outalu=>alu_result, rt_data_T=>rt_data_B3,
-        Reg_Dest=>reg_dest, zero_flag=>zero_flag,
+        PC_Branch=>branch, alu_result=>outalu, rt_data_B3=>rt_data_T,
+        reg_dest=>Reg_Dest, zero_flag=>zero_flag,
         --== OUT B3
         Fonte_PC=>B3.zero_flag, branch_4=>B3.PC_Branch,
         alu_result_4=>B3.alu_result, rt_data_4=>B3.alu_result,
@@ -324,34 +311,27 @@ begin
         Reg_Dest_5=>B4.Reg_W, alu_result_5=>B4.alu_result,
         Data_mem_5=>b4.Data_Mem
     );
+
     i_S_OUT <= i_S_IN;
     npc_S_OUT <= npc_S_IN;
 
     REGS: entity work.reg_bank(reg_bank) port map
-    (AdRP1=>rs_address, DataRP1=>rs_data_S, AdRP2=>IR_S_IN(20 downto 16), DataRP2=>rt_data_S,
-       ck=>ck, rst=>rst, ce=>EscReg, AdWP=>Reg_W, DataWP=>Reg_D);
+    (rs_address=>rs_address, DataRP1=>rs_data_S, rt_address=>rt_address, DataRP2=>rt_data_S,
+       ck=>ck, rst=>rst, ce=>EscReg, Reg_W=>Reg_Dest_5, Reg_Data=>Reg_Data);
 
+       
 
-    -- auxiliary signals 
-    --inst_branch  <= '1' when uins.i=BEQ or uins.i=BGEZ or uins.i=BLEZ or uins.i=BNE else 
-    --              '0';
-	--inst_branch_out <= inst_branch;
-   
-	-- inst_R_sub is a subset of R-type instructions
     inst_R_sub  <= '1' when i=ADDU or i=SUBU or i=AAND
                        or i=OOR or i=XXOR 
                        or i=NNOR or i=NOP  else
                    '0';
 
-
-
-	-- inst_I is a subset of I-type instructions
-    --inst_I_sub  <= '1' when uins.i=ADDIU or uins.i=ANDI or uins.i=ORI or uins.i=XORI else
-    --              '0';
    --==============================================================================
    -- second stage
    --==============================================================================
 
+    i_S_OUT <= i_S_IN;
+    
     i_S_IN <= ADDU    when IR(31 downto 26)="000000" and IR(10 downto 0)="00000100001" else
             NOP     when IR(31 downto 0)=x"00000000" else
             SUBU    when IR(31 downto 26)="000000" and IR(10 downto 0)="00000100011" else
@@ -386,110 +366,52 @@ begin
             JAL     when IR(31 downto 26)="000011" else
             JALR    when IR(31 downto 26)="000000"  and IR(20 downto 16)="00000"
                     and IR(10 downto 0) = "00000001001" else
-            JR      when IR(31 downto 26)="000000" and IR(20 downto 0)="000000000000000001000" else
+            JR      when IR(31 downto 26)="000000" and IR(20 downto 0)="000000000000000001000" else 
     invalid_instruction ; -- IMPORTANT: default condition is invalid instruction;
 
-   sign_extend_S_OUT <=  x"FFFF" & IR_IN(15 downto 0) when IR_IN(15)='1' else
-             x"0000" & IR_IN(15 downto 0);
 
+    sign_extend_S_OUT <=  x"FFFF" & IR(15 downto 0) when IR(15)='1' else
+             x"0000" & IR(15 downto 0);
      cte_im <= 
             --sign_extend(29 downto 0)  & "00"     when inst_branch='1'			else
             --branch address adjustment for word frontier
-            "0000" & IR_IN(25 downto 0) & "00" when uins.i=J or uins.i=JAL 		else
+            "0000" & IR_IN(25 downto 0) & "00" when i_S_IN=J or i_S_IN=JAL 		else
            --  J/JAL are word addressed. MSB four bits are defined at the ALU, not here!
-            x"0000" & IR_IN(15 downto 0) when uins.i=ANDI or uins.i=ORI  or uins.i=XORI 	else
+            x"0000" & IR_IN(15 downto 0) when i_S_IN=ANDI or i_S_IN =ORI  or i_S_IN=XORI 	else
             -- logic instructions with immediate operand are zero extended
-            sign_extend;
+            sign_extend_S_OUT;
             -- The default case is used by addiu, lbu, lw, sbu and sw instructions
 
-    
-    --ce=>uins.wreg
-
-
-   -- The then clause is only used for logic shifts with a shamt field       
-   -- M3: adS <= IR_IN(20 downto 16) when uins.i=SSLL or uins.i=SSRA or uins.i=SSRL else 
-      --    IR_IN(25 downto 21);
-          
-   -- REGS: entity work.reg_bank(reg_bank) port map
-   --     (AdRP1=>adS, DataRP1=>R1, AdRP2=>IR_IN(20 downto 16), DataRP2=>R2,
-	--	   ck=>ck, rst=>rst, ce=>uins.wreg, AdWP=>adD, DataWP=>RIN);
-    
-    -- sign extension 
-    
-    
-    -- Immediate constant
-   -- M5: cte_im <= sign_extend(29 downto 0)  & "00"     when inst_branch='1'			else
-    --  -      -- branch address adjustment for word frontier
-      --      "0000" & IR_IN(25 downto 0) & "00" when uins.i=J or uins.i=JAL 		else
-     ---       -- J/JAL are word addressed. MSB four bits are defined at the ALU, not here!
-      --      x"0000" & IR_IN(15 downto 0) when uins.i=ANDI or uins.i=ORI  or uins.i=XORI 	else
-            -- logic instructions with immediate operand are zero extended
-     --       sign_extend;
-            -- The default case is used by addiu, lbu, lw, sbu and sw instructions
-             
-    -- second stage registers
-    --RSreg:  entity work.regnbits port map(ck=>ck, rst=>rst, ce=>uins.CY2, D=>R1, Q=>RS);
-
-    --RTreg:  entity work.regnbits port map(ck=>ck, rst=>rst, ce=>uins.CY2, D=>R2, Q=>RT);
-    
-    --RIM:    entity work.regnbits port map(ck=>ck, rst=>rst, ce=>uins.CY2, D=>cte_im, Q=>IMED);
- 
  
     --==============================================================================
     -- third stage
     --==============================================================================
-                      
-    -- select the first ALU operand                           
-    --M6: op1 <= NPC_IN  when inst_branch='1' else                                --
-   --     RS; 
-    --'1' = extend ; '0' = rt_data
-    alu_operator2 <= '1' when inst_R_sub='1' or uins.i=SLTU
-    or uins.i=SLT or uins.i=JR or uins.i=SLLV or uins.i=SRAV or uins.i=SRLV 
-    else '0';
-                                                                     --op1 sempre recebe rs
-    
-    -- select the second ALU operand
-    --M7: op2 <= RT when inst_R_sub='1' or uins.i=SLTU or uins.i=SLT or uins.i=JR 
-     --             or uins.i=SLLV or uins.i=SRAV or uins.i=SRLV else IMED; 
+
+    alu_operator2 <= '1' when inst_R_sub='1' or i_T_IN=SLTU
+                        or i_T_IN=SLT or i_T_IN=JR or i_T_IN=SLLV or i_T_IN=SRAV or i_T_IN=SRLV 
+                        else '0';
+
+                            
     op2 <= rt_data_T when alu_operator2='0' else extend_data_T;                              --op2 mux decide
 
     branch <= (sign_extend_T_in(29 downto 0)  & "00") + npc_T_IN;
      --sign_extend(29 downto 0)  & "00"     when inst_branch='1'
 
 
-    Mux_Wreg: Reg_Dest <= "11111"       when uins.i=JAL else -- JAL writes in register $31
+    Mux_Wreg: Reg_Dest <= "11111"       when i_T_IN=JAL else -- JAL writes in register $31
               rd_address                when (inst_R_sub='1' 
-                                        or uins.i=SLTU or uins.i=SLT
-                                        or uins.i=JALR
-                                        or uins.i=SSLL or uins.i=SLLV
-                                        or uins.i=SSRA or uins.i=SRAV
-                                        or uins.i=SSRL or uins.i=SRLV) else
-              rt_address    -- inst_I_sub='1' or uins.i=SLTIU or uins.i=SLTI 
+                                        or i_T_IN=SLTU or i_T_IN=SLT
+                                        or i_T_IN=JALR
+                                        or i_T_IN=SSLL or i_T_IN=SLLV
+                                        or i_T_IN=SSRA or i_T_IN=SRAV
+                                        or i_T_IN=SSRL or i_T_IN=SRLV) else
+              rt_address;    -- inst_I_sub='1' or uins.i=SLTIU or uins.i=SLTI 
                                     -- or uins.i=LW or  uins.i=LBU  or uins.i=LUI, or default
 
     -- ALU instantiation
     DALU: entity work.alu port map (
-            op1=>op1, op2=>op2, outalu=>outalu, op_alu=>alu_op,zero_flag=>zero_flag                          --instanciando saida da ula
+            op1=>op1, op2=>op2, outalu=>outalu, op_alu=>i_T_IN, zero_flag=>zero_flag                         
         );
-
-
-
-    
-    
-    -- ALU register
-   -- Reg_ALU: entity work.regnbits  port map(
-   --         ck=>ck, rst=>rst, ce=>uins.walu, D=>outalu, Q=>RALU
-   --     );               
- 
-    -- evaluation of conditions to take the branch instructions
-   -- salta <=  '1' when ( (RS=RT  and uins.i=BEQ)  or (RS>=0  and uins.i=BGEZ) or
-    --                     (RS<=0  and uins.i=BLEZ) or (RS/=RT and uins.i=BNE) )  else
-     --                  '0';
-
-
-   -- salta_out <= salta;
-
-
 
     --==============================================================================
     -- fourth stage
@@ -520,17 +442,7 @@ begin
     
     Esc_Reg <= '0' when i=NOP or i=BEQ or i=BGEZ or i=BLEZ or i=BNE or i=J else '1';   
 
-    -- register bank write address selection
-    --M4: adD <= "11111"              when uins.i=JAL else -- JAL writes in register $31
-     --       IR_IN(15 downto 11)     when (inst_R_sub='1' 
-      --                              or uins.i=SLTU or uins.i=SLT
-       --                             or uins.i=JALR
-        --                            or uins.i=MFHI or uins.i=MFLO
-         --                           or uins.i=SSLL or uins.i=SLLV
-          --                          or uins.i=SSRA or uins.i=SRAV
-           --                         or uins.i=SSRL or uins.i=SRLV) else
-           -- IR_IN(20 downto 16);    -- inst_I_sub='1' or uins.i=SLTIU or uins.i=SLTI 
-                                    -- or uins.i=LW or  uins.i=LBU  or uins.i=LUI, or default
+
     RESULT_OUT <= result;
 end datapath;
 
@@ -552,8 +464,10 @@ entity control_unit is
             --uins : out microinstruction;
             reg_dest, reg_dest_4 : in std_logic_vector(4 downto 0);
             i_B2 :in inst_type;
-            npc,npc_B2 rs_data, rt_data, rt_data_B3, signal_extend, rd_address, rt_address, rd_address    : in std_logic_vector(31 downto 0)
+            npc, npc_B2, rs_data, rt_data, rt_data_B3, signal_extend, rd_address, rt_address, rd_address    : in std_logic_vector(31 downto 0)
             data_mem, instruction, instruction_B2, rt_address, PC_Branch, alu_result_4,alu_result : in std_logic_vector(31 downto 0);
+            
+            
             B1   : out if_id;
             B2   : out id_ex;
             B3   : out ex_mem;
