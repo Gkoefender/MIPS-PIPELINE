@@ -50,7 +50,7 @@ package aux_functions is
    subtype wires8   is std_logic_vector( 7 downto 0);
    subtype wires4   is std_logic_vector( 3 downto 0);
 
-   -- definição do tipo 'memory', que será utilizado para as memórias de dados/instruções
+   -- definio do tipo 'memory', que ser utilizado para as memrias de dados/instrues
    constant MEMORY_SIZE : integer := 2048;     
    type memory is array (0 to MEMORY_SIZE) of wires8;
 
@@ -139,7 +139,7 @@ architecture RAM_mem of RAM_mem is
    alias  low_address: wires16 is tmp_address(15 downto 0);    --  baixa para 16 bits devido ao CONV_INTEGER --
 begin     
 
-   tmp_address <= address - START_ADDRESS;   --  offset do endereçamento  -- 
+   tmp_address <= address - START_ADDRESS;   --  offset do endereamento  -- 
    
    -- writes in memory ASYNCHRONOUSLY  -- LITTLE ENDIAN -------------------
    process(ce_n, we_n, low_address) -- Modification in 16/05/2012 for monocycle processors only,
@@ -193,15 +193,15 @@ architecture cpu_tb of cpu_tb is
            i_cpu_address, d_cpu_address, data_cpu, tb_add, tb_data : wires32 := (others => '0' );
     
     signal Dce_n, Dwe_n, Doe_n, Ice_n, Iwe_n, Ioe_n, ck, rst, rstCPU, 
-           go_i, go_d, ce, rw, bw: std_logic;
+           go_i, go_d, ce, rw, bw, bw2: std_logic;
     
-    file ARQ : TEXT open READ_MODE is "Test_Program_Allinst_MIPS_MCS.txt";
+    file ARQ : TEXT open READ_MODE is "prog.txt";
  
 begin
            
     Data_mem:  entity work.RAM_mem 
                generic map( START_ADDRESS => x"10010000" )
-               port map (ce_n=>Dce_n, we_n=>Dwe_n, oe_n=>Doe_n, bw=>bw, address=>Dadress, data=>Ddata);
+               port map (ce_n=>Dce_n, we_n=>Dwe_n, oe_n=>Doe_n, bw=>bw2, address=>Dadress, data=>Ddata);
                                             
     Instr_mem: entity work.RAM_mem 
                generic map( START_ADDRESS => x"00400000" )
@@ -219,20 +219,23 @@ begin
     
     -- instructions memory signals --------------------------------------------------------
     Ice_n <= '0';                                 
-    Ioe_n <= '1' when rstCPU='1' else '0';           -- impede leitura enquanto está escrevendo                             
+    Ioe_n <= '1' when rstCPU='1' else '0';           -- impede leitura enquanto est escrevendo                             
     Iwe_n <= '0' when go_i='1'   else '1';           -- escrita durante a leitura do arquivo 
     
     Iadress <= tb_add  when rstCPU='1' else i_cpu_address;
     Idata   <= tb_data when rstCPU='1' else (others => 'Z'); 
   
+	  bw2 <= '1' when go_i='1'   else bw;
 
     cpu: entity work.MIPS_MCS  port map(
               clock=>ck, reset=>rstCPU,
               i_address => i_cpu_address,
               instruction => Idata,
-              ce=>ce,  rw=>rw,  bw=>bw,
               d_address => d_cpu_address,
-              data => data_cpu
+              data => data_cpu,
+				  ce => ce,
+				  rw =>rw,
+				  bw => bw
         ); 
 
     rst <='1', '0' after 15 ns;       -- generates the reset signal 
@@ -248,7 +251,7 @@ begin
     -- this process loads the instruction memory and the data memory during reset
     --
     --
-    --   O PROCESSO ABAIXO É UMA PARSER PARA LER CÓDIGO GERADO PELO SPIM NO
+    --   O PROCESSO ABAIXO  UMA PARSER PARA LER CDIGO GERADO PELO SPIM NO
     --   SEGUINTE FORMATO:
     --
     --      Text Segment
@@ -276,7 +279,7 @@ begin
                                  
         wait until rst = '1';
         
-        while NOT (endfile(ARQ)) loop    -- INÍCIO DA LEITURA DO ARQUIVO CONTENDO INSTRUÇÃO E DADOS -----
+        while NOT (endfile(ARQ)) loop    -- INCIO DA LEITURA DO ARQUIVO CONTENDO INSTRUO E DADOS -----
             --readline(ARQ, ARQ_LINE);      
             --read(ARQ_LINE, line_arq(1 to  ARQ_LINE'length) );
 				readFileLine(ARQ, line_arq);
@@ -287,10 +290,10 @@ begin
                    code:=false;                    -- data 
             else 
                i := 1;                                  -- LEITORA DE LINHA - analizar o loop abaixo para compreender 
-               address_flag := 0;                       -- para INSTRUÇÃO é um para (end,inst)
+               address_flag := 0;                       -- para INSTRUO  um para (end,inst)
                                                         -- para DADO aceita (end, dado 0, dado 1, dado 2 ....)
                loop                                     
-                  if line_arq(i) = '0' and line_arq(i+1) = 'x' then      -- encontrou indicação de número hexa: '0x'
+                  if line_arq(i) = '0' and line_arq(i+1) = 'x' then      -- encontrou indicao de nmero hexa: '0x'
                          i := i + 2;
                          if address_flag=0 then
                                for w in 0 to 7 loop
@@ -316,18 +319,18 @@ begin
                                go_i <= '0';
                                go_d <= '0'; 
                                
-                               address_flag := 2;    -- sinaliza que já leu o conteúdo do endereço;
+                               address_flag := 2;    -- sinaliza que j leu o contedo do endereo;
 
                          end if;
                   end if;
                   i := i + 1;
                   
-                  -- sai da linha quando chegou no seu final OU já leu par(endereço, instrução) no caso de código
+                  -- sai da linha quando chegou no seu final OU j leu par(endereo, instruo) no caso de cdigo
                   exit when i=TAM_LINHA or (code=true and address_flag=2);
                end loop;
             end if;
             
-        end loop;                        -- FINAL DA LEITURA DO ARQUIVO CONTENDO INSTRUÇÃO E DADOS -----
+        end loop;                        -- FINAL DA LEITURA DO ARQUIVO CONTENDO INSTRUO E DADOS -----
         
         rstCPU <= '0' after 2 ns;   -- release the processor to execute
         wait for 4 ns;   -- To activate the RST CPU signal
