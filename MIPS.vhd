@@ -72,6 +72,7 @@ package p_MIPS_S is
         aluResult        : std_logic_vector(31 downto 0); -- calculated alu result
         writeRegister    : std_logic;                     -- determines whether or not to write to the register
         regDestAddress   : std_logic_vector(4  downto 0); -- address of the register in which the data will be written
+        rtData           : std_logic_vector(31 downto 0);
     end record;
 end p_MIPS_S;
 
@@ -96,7 +97,7 @@ begin
     begin
         if rst = '1' then -- if reset is 0 then the register assumes the initial value
             Q <= INIT_VALUE(31 downto 0);
-        elsif rising_edge(ck) then  -- rising edge clock sensitivity
+        elsif not rising_edge(ck) then  -- rising edge clock sensitivity
             if ce = '1' then -- check chip enable
                 Q <= D; -- copy data
             end if;
@@ -238,12 +239,35 @@ architecture datapath of  datapath is
     signal aluResult     : std_logic_vector(31 downto 0) := (others=> '0');
     signal dataRead      : std_logic_vector(31 downto 0) := (others=> '0');
     signal aluOperator   : std_logic;
-    signal writeRegister : std_logic;
+    signal writeRegister : std_logic := '0';
     signal pc, incpc     : std_logic_vector(31 downto 0) := (others=> '0');
     signal instruction   : instType;
-    signal inst_branch, inst_R_sub, inst_I_sub: std_logic; -- auxiliary signals
+    signal inst_branch, inst_R_sub, inst_I_sub: std_logic := '0'; -- auxiliary signals
+    signal stopPC        : std_logic := '0';
+    signal ForwardA      : std_logic_vector (1 downto 0) := "00";
+    signal ForwardB      : std_logic_vector (1 downto 0) := "00";
+    signal flush         : std_logic := '0';
 begin
 
+    --==============================================================================
+    -- Forwarding unit
+    --==============================================================================
+    --1 EX -> MEM
+    ForwardA <= "10" when (id_ex.rsAddress = ex_mem.regDestAddress) and (ex_mem.regDestAddress /= "00000") and (writeRegister = '1') else
+                "01" when (mem_wb.writeRegister = '1') and (mem_wb.regDestAddress /= "00000") and (id_ex.rsAddress = mem_wb.regDestAddress) and (ex_mem.regDestAddress /= id_ex.rsAddress ) else
+                "00";
+
+    ForwardB <= "10" when (id_ex.rtAddress = ex_mem.regDestAddress) and (ex_mem.regDestAddress /= "00000") and (writeRegister = '1') else  
+                "01" when (mem_wb.writeRegister = '1') and (mem_wb.regDestAddress /= "00000") and (id_ex.rtAddress = mem_wb.regDestAddress) and (ex_mem.regDestAddress /= id_ex.rtAddress) else
+                "00";
+
+
+    stopPC <= '1' when (id_ex.instruction = LW) and ( id_ex.rtAddress = rsAddress or id_ex.rtAddress = rtAddress ) else
+              '0';
+        
+    flush  <= '1' when willBranch = '1'  else '0';
+
+ 
     --==============================================================================
     -- first stage
     --==============================================================================
@@ -254,10 +278,15 @@ begin
 
     -- PC value
     i_address <= pc;
-    pc <= ex_mem.branchAddress when ex_mem.willBranch = '1' or (ex_mem.instruction = J 
-          or ex_mem.instruction = JAL or ex_mem.instruction = JALR or ex_mem.instruction = JR) else 
+    --pc <= ex_mem.branchAddress when ex_mem.willBranch = '1' or (ex_mem.instruction = J 
+    --      or ex_mem.instruction = JAL or ex_mem.instruction = JALR or ex_mem.instruction = JR) else 
+    --      incpc;
+
+    pc <= branchAddress when willBranch = '1' or (id_ex.instruction = J 
+          or id_ex.instruction = JR) else 
           incpc;
-    npc <= pc + 4;
+
+    npc <= if_id.npc  when stopPC = '1' else pc + 4;
     incpc <= if_id.npc;
 
     firstBarrier: process(ck, rst)
@@ -265,8 +294,8 @@ begin
 		if rst = '1' then
             if_id.ir <=   x"00000000";
             if_id.npc <=  x"00400000";
-		elsif rising_edge(ck) then 
-			if_id.ir <= ir;
+		elsif rising_edge(ck) and stopPC = '0' then 
+			if_id.ir <=  ir;
             if_id.npc <= npc;
 		end if;
 	end process firstBarrier;
@@ -300,19 +329,19 @@ begin
 	end process secondBarrier;
     
     instruction <=
-        ADDU    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100001" else
-        NOP     when if_id.ir(31 downto 0)  = x"00000000"                                        else
-        SUBU    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100011" else
-        AAND    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100100" else
-        OOR     when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100101" else
-        XXOR    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100110" else
-        NNOR    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100111" else
-        SSLL    when if_id.ir(31 downto 21) = "00000000000" and if_id.ir(5 downto 0) = "000000"  else
-        SLLV    when if_id.ir(31 downto 26) = "000000" and ir(10 downto 0) = "00000000100"       else
-        SSRA    when if_id.ir(31 downto 21) = "00000000000" and ir(5 downto 0) = "000011"        else
-        SRAV    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000000111" else
-        SSRL    when if_id.ir(31 downto 21) = "00000000000" and if_id.ir(5 downto 0) = "000010"  else
-        SRLV    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000000110" else
+        ADDU    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100001" and stopPC='0' else
+        NOP     when if_id.ir(31 downto 0)  = x"00000000" or stopPC ='1' or flush ='1'                          else
+        SUBU    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100011"                else
+        AAND    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100100"                else
+        OOR     when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100101"                else
+        XXOR    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100110"                else
+        NNOR    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000100111"                else
+        SSLL    when if_id.ir(31 downto 21) = "00000000000" and if_id.ir(5 downto 0) = "000000"                 else
+        SLLV    when if_id.ir(31 downto 26) = "000000" and ir(10 downto 0) = "00000000100"                      else
+        SSRA    when if_id.ir(31 downto 21) = "00000000000" and ir(5 downto 0) = "000011"                       else
+        SRAV    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000000111"                else
+        SSRL    when if_id.ir(31 downto 21) = "00000000000" and if_id.ir(5 downto 0) = "000010"                 else
+        SRLV    when if_id.ir(31 downto 26) = "000000" and if_id.ir(10 downto 0) = "00000000110"                else
         ADDIU   when if_id.ir(31 downto 26) = "001001" else
         ANDI    when if_id.ir(31 downto 26) = "001100" else
         ORI     when if_id.ir(31 downto 26) = "001101" else
@@ -371,14 +400,16 @@ begin
         x"0000" & if_id.ir(15 downto 0) when instruction=ANDI or instruction=ORI  or instruction=XORI else
         extSignal;
  
-    regDestAddress <= id_ex.rdAddress when id_ex.inst_R_sub='1' else id_ex.rtAddress;
+    regDestAddress <= "00000"         when id_ex.instruction = NOP  or flush ='1'   else  
+                      id_ex.rdAddress when id_ex.inst_R_sub='1'                     else 
+                      id_ex.rtAddress;
 
-    branchAddress <= id_ex.npc + aluResult;
 
     -- evaluation of conditions to take the branch instructions
     willBranch <=  '1' when ((id_ex.rsData = id_ex.rtData and id_ex.instruction = BEQ)  or 
-                            (id_ex.rsData >=0  and id_ex.instruction=BGEZ) or
+                            (id_ex.rsData >=0  and id_ex.instruction=BGEZ)  or
                             (id_ex.rsData <= 0  and id_ex.instruction=BLEZ) or 
+                            (id_ex.instruction = j or id_ex.instruction = jr) or
                             (id_ex.rsData /= id_ex.rtData and id_ex.instruction=BNE)) else 
                     '0';
 
@@ -391,29 +422,46 @@ begin
         if rst = '1' then
             ex_mem.willBranch <= '0';
             ex_mem.regDestAddress   <= "00000";
-            ex_mem.instruction <= NOP;
+            ex_mem.instruction <= NOP;            
 		elsif rising_edge(ck) then 
 			ex_mem.ir  <= id_ex.ir;
             ex_mem.npc <= id_ex.npc;
             ex_mem.instruction <= id_ex.instruction;
-            ex_mem.branchAddress <= aluresult;
+            ex_mem.branchAddress <= branchAddress;
             ex_mem.aluResult <= aluResult;
+        if id_ex.instruction = sw and ex_mem.regDestAddress = regDestAddress  then
+            ex_mem.rtData <= ex_mem.aluResult;
+        else 
             ex_mem.rtData <= id_ex.rtData;
+        end if;
             ex_mem.inst_R_sub <= id_ex.inst_R_sub;
             ex_mem.inst_branch <= id_ex.inst_branch;
             ex_mem.willBranch <= willBranch;  
-            ex_mem.regDestAddress <= regDestAddress;
+            ex_mem.regDestAddress <=regDestAddress;
+        elsif ex_mem.willBranch='1' then
+            ex_mem.instruction <= NOP;
 		end if;
 	end process thirdBarrier;
 
-    -- select the first ALU operand                           
-    aluOp1 <= id_ex.npc when id_ex.inst_branch='1' else id_ex.rsData; 
+    branchAddress <= aluResult;
+
+     -- select the first ALU operand                           
+     aluOp1 <=  ex_mem.aluResult    when ForwardA ="10"                             else
+                mem_wb.dataRead     when ForwardA ="01" and mem_wb.instruction = LW        else 
+                mem_wb.aluResult    when ForwardA ="01"         else 
+                id_ex.npc           when id_ex.inst_branch='1'  else
+                id_ex.rsData;
      
-    -- select the second ALU operand
-    aluOp2 <= id_ex.rtData when id_ex.inst_R_sub='1' or id_ex.instruction=SLTU or id_ex.instruction=SLT or id_ex.instruction=JR 
-                  or id_ex.instruction=SLLV or id_ex.instruction=SRAV or id_ex.instruction=SRLV else id_ex.extData; 
-                 
-    -- ALU instantiation
+     -- select the second ALU operand
+     aluOp2 <=  id_ex.extData       when id_ex.inst_R_sub='0'   else
+                ex_mem.aluResult    when ForwardB ="10"          else
+                mem_wb.aluResult    when ForwardB ="01"           else 
+                id_ex.rtData        when id_ex.inst_R_sub='1' or id_ex.instruction=SLTU or id_ex.instruction=SLT or id_ex.instruction=JR 
+                or id_ex.instruction=SLLV or id_ex.instruction=SRAV or id_ex.instruction=SRLV;
+
+    
+
+
     DALU: entity work.alu port map (
             op1=>aluOp1, op2=>aluOp2, outalu=>aluResult, op_alu=>id_ex.instruction
         );
@@ -439,11 +487,15 @@ begin
             mem_wb.regDestAddress <= ex_mem.regDestAddress;
             mem_wb.inst_R_sub <= ex_mem.inst_R_sub;
             mem_wb.inst_branch <= ex_mem.inst_branch;
+            mem_wb.branchAddress <= ex_mem.branchAddress;
+            mem_wb.rtData <= ex_mem.rtData;
 		end if;
 	end process fourthBarrier;
 
     writeRegister <= '0' when (ex_mem.inst_branch = '1' or ex_mem.instruction = J or 
-                               ex_mem.instruction = JR or ex_mem.instruction = SW) else '1';
+                               ex_mem.instruction = JR or ex_mem.instruction = SW
+                               or ex_mem.instruction = NOP )
+                               else '1';
 
     d_address <= ex_mem.aluResult;
     
@@ -456,7 +508,8 @@ begin
     -- fifth stage
     --==============================================================================
     
-    regDestData <= mem_wb.dataRead when mem_wb.instruction = LW else mem_wb.aluResult;
+    regDestData <= mem_wb.dataRead when mem_wb.instruction = LW else 
+                   mem_wb.aluResult;
 end datapath;
 
 
